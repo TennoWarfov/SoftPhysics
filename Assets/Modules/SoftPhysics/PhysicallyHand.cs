@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-namespace Modules.Softbody
+namespace Modules.SoftPhysics
 {
     public class PhysicallyHand : MonoBehaviour
     {
@@ -44,7 +44,7 @@ namespace Modules.Softbody
 
         private void FixedUpdate()
         {
-            for (int i = 0; i < Mathf.Min(originalBones.Length, _bones.Count); i++)
+            for (var i = 0; i < Mathf.Min(originalBones.Length, _bones.Count); i++)
             {
                 FollowPose(_bones[i], originalBones[i]);
             }
@@ -52,14 +52,12 @@ namespace Modules.Softbody
 
         private void FollowPose(Rigidbody rb, Transform target)
         {
-            // Позиция
-            Vector3 positionError = target.position - rb.position;
+            var positionError = target.position - rb.position;
             rb.linearVelocity = positionError * positionGain;
 
-            // Вращение
-            Quaternion rotationError = target.rotation * Quaternion.Inverse(rb.rotation);
+            var rotationError = target.rotation * Quaternion.Inverse(rb.rotation);
 
-            rotationError.ToAngleAxis(out float angle, out Vector3 axis);
+            rotationError.ToAngleAxis(out var angle, out var axis);
 
             if (angle > 180f)
                 angle -= 360f;

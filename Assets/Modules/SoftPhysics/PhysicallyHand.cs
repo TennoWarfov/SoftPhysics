@@ -31,23 +31,15 @@ namespace Modules.SoftPhysics
 
             var colliders = GetComponentsInChildren<Collider>();
             for (var i = 0; i < colliders.Length; i++)
-            {
-                for (var j = i + 1; j < colliders.Length; j++)
-                {
-                    if (colliders[i] && colliders[j])
-                    {
-                        Physics.IgnoreCollision(colliders[i], colliders[j], true);
-                    }
-                }
-            }
+            for (var j = i + 1; j < colliders.Length; j++)
+                if (colliders[i] && colliders[j])
+                    Physics.IgnoreCollision(colliders[i], colliders[j], true);
         }
 
         private void FixedUpdate()
         {
             for (var i = 0; i < Mathf.Min(originalBones.Length, _bones.Count); i++)
-            {
                 FollowPose(_bones[i], originalBones[i]);
-            }
         }
 
         private void FollowPose(Rigidbody rb, Transform target)

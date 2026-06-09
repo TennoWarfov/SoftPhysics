@@ -72,7 +72,9 @@ namespace Modules.SoftPhysics
         [SerializeField]
         private float blendSpeed = 6f;
 
-        [Tooltip("How strongly the rotation constraint aligns Z to the surface tangent plane. 0 = free rotation, 1 = fully clamped.")]
+        [Tooltip(
+            "How strongly the rotation constraint aligns Z to the surface tangent plane. 0 = free rotation, 1 = fully clamped."
+        )]
         [Range(0f, 1f)]
         [SerializeField]
         private float rotationConstraintStrength = 1f;
@@ -127,6 +129,8 @@ namespace Modules.SoftPhysics
                 targetPos = Vector3.Lerp(desiredPos, constrainedPos, _blendWeight);
             }
 
+            targetPos += SolveBonesPenetrationCorrection();
+
             constrainedHandRoot.position = Vector3.Lerp(
                 constrainedHandRoot.position,
                 targetPos,
@@ -134,11 +138,11 @@ namespace Modules.SoftPhysics
             );
 
             var targetRot = desiredRot;
-            if (_blendWeight > 0.01f)
-            {
-                var constrainedRot = SolveForRotation(desiredRot);
-                targetRot = Quaternion.Slerp(desiredRot, constrainedRot, _blendWeight * rotationConstraintStrength);
-            }
+            // if (_blendWeight > 0.01f)
+            // {
+            //     var constrainedRot = SolveForRotation(desiredRot);
+            //     targetRot = Quaternion.Slerp(desiredRot, constrainedRot, _blendWeight * rotationConstraintStrength);
+            // }
 
             constrainedHandRoot.rotation = Quaternion.Slerp(
                 constrainedHandRoot.rotation,
@@ -206,8 +210,12 @@ namespace Modules.SoftPhysics
             // Tangent: direction from nearest to second nearest point, projected onto tangent plane.
             if (count >= 2)
             {
-                var p0 = pointCloud.transform.TransformPoint((Vector3)pointCloud.Points[_knnResults[0].Index]);
-                var p1 = pointCloud.transform.TransformPoint((Vector3)pointCloud.Points[_knnResults[1].Index]);
+                var p0 = pointCloud.transform.TransformPoint(
+                    (Vector3)pointCloud.Points[_knnResults[0].Index]
+                );
+                var p1 = pointCloud.transform.TransformPoint(
+                    (Vector3)pointCloud.Points[_knnResults[1].Index]
+                );
                 var tangentCandidate = Vector3.ProjectOnPlane(p1 - p0, surfaceNormalWS);
                 if (tangentCandidate.sqrMagnitude > 1e-6f)
                     _surfaceTangent = tangentCandidate.normalized;
@@ -227,6 +235,66 @@ namespace Modules.SoftPhysics
             var t = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(penetration / maxPenetrationDepth));
             var correctedPos = surfacePointWS + surfaceNormalWS * handRadius;
             return Vector3.Lerp(desiredWorldPos, correctedPos, t);
+        }
+
+        // ── Bone penetration correction ───────────────────────────────────────
+
+        // Checks each constrained bone against the surface and returns the world-space
+        // offset to add to constrainedHandRoot so the deepest-penetrating bone is pushed out.
+        // Bone positions are from the previous frame (MirrorBonePoses runs after this).
+        private Vector3 SolveBonesPenetrationCorrection()
+        {
+            var maxCorrection = Vector3.zero;
+            var maxPenetration = 0f;
+
+            foreach (var bone in constrainedBones)
+            {
+                var bonePos = bone.position;
+                var localPos = pointCloud.transform.InverseTransformPoint(bonePos);
+                var count = pointCloud.QueryKNearest(
+                    localPos,
+                    kNeighbors,
+                    searchRadius,
+                    _knnResults
+                );
+
+                if (count == 0)
+                    continue;
+
+                var wPoint = Vector3.zero;
+                var wNormal = Vector3.zero;
+                var wSum = 0f;
+
+                for (var i = 0; i < count; i++)
+                {
+                    var idx = _knnResults[i].Index;
+                    var w = 1f / (Mathf.Sqrt(_knnResults[i].DistanceSqr) + 1e-4f);
+                    wPoint += (Vector3)pointCloud.Points[idx] * w;
+                    wNormal += (Vector3)pointCloud.Normals[idx] * w;
+                    wSum += w;
+                }
+
+                var surfacePointWS = pointCloud.transform.TransformPoint(wPoint / wSum);
+                var surfaceNormalWS = pointCloud
+                    .transform.TransformDirection(wNormal / wSum)
+                    .normalized;
+
+                var signedDist = Vector3.Dot(bonePos - surfacePointWS, surfaceNormalWS);
+                var penetration = -signedDist;
+
+                if (penetration > maxPenetration)
+                {
+                    maxPenetration = penetration;
+                    var t = Mathf.SmoothStep(
+                        0f,
+                        1f,
+                        Mathf.Clamp01(penetration / maxPenetrationDepth)
+                    );
+                    maxCorrection = surfaceNormalWS * (penetration * t);
+                }
+            }
+
+            return maxCorrection;
         }
 
         // ── Rotation constraint ───────────────────────────────────────────────

@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace Modules.SoftPhysics
@@ -7,7 +7,7 @@ namespace Modules.SoftPhysics
     public class MeshPointCloudGenerator : MonoBehaviour
     {
         [SerializeField]
-        private MeshFilter sourceMeshFilter;
+        private MeshFilter[] sourceMeshFilters;
 
         [Header("Point Cloud Offset")]
         [SerializeField]
@@ -51,46 +51,68 @@ namespace Modules.SoftPhysics
         [ContextMenu("Generate Point Cloud")]
         public void Generate()
         {
-            if (sourceMeshFilter == null)
+            if (sourceMeshFilters == null || sourceMeshFilters.Length == 0)
                 return;
-
-            Mesh mesh = sourceMeshFilter.sharedMesh;
-
-            Vector3[] vertices = mesh.vertices;
-            Vector3[] meshNormals = mesh.normals;
-            int[] triangles = mesh.triangles;
 
             var uniqueVertices = new List<Vector3>();
             var uniqueNormals = new List<Vector3>();
+            var lookup = new Dictionary<Vector3, int>();
+            var globalTriangles = new List<int>();
 
-            Dictionary<Vector3, int> lookup = new();
-
-            for (int i = 0; i < vertices.Length; i++)
+            foreach (var mf in sourceMeshFilters)
             {
-                if (!lookup.ContainsKey(vertices[i]))
-                {
-                    lookup.Add(vertices[i], uniqueVertices.Count);
+                if (mf == null || mf.sharedMesh == null)
+                    continue;
 
-                    uniqueVertices.Add(vertices[i]);
-                    uniqueNormals.Add(meshNormals[i]);
+                var mesh = mf.sharedMesh;
+                var vertices = mesh.vertices;
+                var meshNormals = mesh.normals;
+                var triangles = mesh.triangles;
+
+                // Map each vertex index in this mesh to a global unique-vertex index,
+                // converting positions and normals into this transform's local space.
+                var indexRemap = new int[vertices.Length];
+
+                for (var i = 0; i < vertices.Length; i++)
+                {
+                    var localPos = transform.InverseTransformPoint(
+                        mf.transform.TransformPoint(vertices[i])
+                    );
+
+                    if (!lookup.TryGetValue(localPos, out var globalIdx))
+                    {
+                        globalIdx = uniqueVertices.Count;
+                        lookup[localPos] = globalIdx;
+
+                        var localNormal = transform.InverseTransformDirection(
+                            mf.transform.TransformDirection(meshNormals[i])
+                        );
+
+                        uniqueVertices.Add(localPos);
+                        uniqueNormals.Add(localNormal);
+                    }
+
+                    indexRemap[i] = globalIdx;
+                }
+
+                for (var i = 0; i < triangles.Length; i += 3)
+                {
+                    globalTriangles.Add(indexRemap[triangles[i]]);
+                    globalTriangles.Add(indexRemap[triangles[i + 1]]);
+                    globalTriangles.Add(indexRemap[triangles[i + 2]]);
                 }
             }
 
             smoothedPoints = uniqueVertices.ToArray();
             normals = uniqueNormals.ToArray();
 
-            List<int>[] neighbours = BuildNeighbourMap(
-                triangles,
-                lookup,
-                vertices,
-                smoothedPoints.Length
-            );
+            var neighbours = BuildNeighbourMap(globalTriangles.ToArray(), smoothedPoints.Length);
 
-            for (int iteration = 0; iteration < smoothingIterations; iteration++)
+            for (var iteration = 0; iteration < smoothingIterations; iteration++)
             {
-                Vector3[] next = new Vector3[smoothedPoints.Length];
+                var next = new Vector3[smoothedPoints.Length];
 
-                for (int i = 0; i < smoothedPoints.Length; i++)
+                for (var i = 0; i < smoothedPoints.Length; i++)
                 {
                     if (neighbours[i].Count == 0)
                     {
@@ -98,11 +120,9 @@ namespace Modules.SoftPhysics
                         continue;
                     }
 
-                    Vector3 average = Vector3.zero;
-
-                    foreach (int neighbour in neighbours[i])
-                        average += smoothedPoints[neighbour];
-
+                    var average = Vector3.zero;
+                    foreach (var nb in neighbours[i])
+                        average += smoothedPoints[nb];
                     average /= neighbours[i].Count;
 
                     next[i] = Vector3.Lerp(smoothedPoints[i], average, smoothingStrength);
@@ -111,12 +131,10 @@ namespace Modules.SoftPhysics
                 smoothedPoints = next;
             }
 
-            for (int i = 0; i < smoothedPoints.Length; i++)
+            for (var i = 0; i < smoothedPoints.Length; i++)
             {
                 normals[i] = normals[i].normalized;
-
                 smoothedPoints[i] += offset;
-
                 smoothedPoints[i] += normals[i] * normalOffset;
             }
 
@@ -128,30 +146,19 @@ namespace Modules.SoftPhysics
         public int QueryKNearest(Vector3 localPos, int k, float radius, List<KNearestResult> results) =>
             _hash?.QueryKNearest(localPos, k, radius, results) ?? 0;
 
-        private List<int>[] BuildNeighbourMap(
-            int[] triangles,
-            Dictionary<Vector3, int> lookup,
-            Vector3[] originalVertices,
-            int pointCount
-        )
+        private List<int>[] BuildNeighbourMap(int[] triangles, int pointCount)
         {
-            List<int>[] neighbours = new List<int>[pointCount];
-
-            for (int i = 0; i < pointCount; i++)
+            var neighbours = new List<int>[pointCount];
+            for (var i = 0; i < pointCount; i++)
                 neighbours[i] = new List<int>();
 
-            for (int i = 0; i < triangles.Length; i += 3)
+            for (var i = 0; i < triangles.Length; i += 3)
             {
-                int a = lookup[originalVertices[triangles[i]]];
-                int b = lookup[originalVertices[triangles[i + 1]]];
-                int c = lookup[originalVertices[triangles[i + 2]]];
-
+                int a = triangles[i], b = triangles[i + 1], c = triangles[i + 2];
                 AddNeighbour(neighbours[a], b);
                 AddNeighbour(neighbours[a], c);
-
                 AddNeighbour(neighbours[b], a);
                 AddNeighbour(neighbours[b], c);
-
                 AddNeighbour(neighbours[c], a);
                 AddNeighbour(neighbours[c], b);
             }
@@ -172,10 +179,8 @@ namespace Modules.SoftPhysics
 
             Gizmos.color = Color.green;
 
-            foreach (Vector3 point in smoothedPoints)
-            {
+            foreach (var point in smoothedPoints)
                 Gizmos.DrawSphere(transform.TransformPoint(point), pointSize);
-            }
         }
     }
 }

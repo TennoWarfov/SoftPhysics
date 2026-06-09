@@ -72,6 +72,11 @@ namespace Modules.SoftPhysics
         [SerializeField]
         private float blendSpeed = 6f;
 
+        [Tooltip("How strongly the rotation constraint aligns Z to the surface tangent plane. 0 = free rotation, 1 = fully clamped.")]
+        [Range(0f, 1f)]
+        [SerializeField]
+        private float rotationConstraintStrength = 1f;
+
         // ── Runtime state ─────────────────────────────────────────────────────
 
         private bool _insideConstraintVolume;
@@ -79,6 +84,9 @@ namespace Modules.SoftPhysics
 
         // Pre-allocated to avoid per-frame GC; KNearestResult is a value type.
         private readonly List<KNearestResult> _knnResults = new(16);
+
+        private Vector3 _surfaceNormal = Vector3.up;
+        private Vector3 _surfaceTangent = Vector3.forward;
 
         // ── Trigger detection ─────────────────────────────────────────────────
 
@@ -125,9 +133,16 @@ namespace Modules.SoftPhysics
                 positionFollowSpeed * Time.deltaTime
             );
 
+            var targetRot = desiredRot;
+            if (_blendWeight > 0.01f)
+            {
+                var constrainedRot = SolveForRotation(desiredRot);
+                targetRot = Quaternion.Slerp(desiredRot, constrainedRot, _blendWeight * rotationConstraintStrength);
+            }
+
             constrainedHandRoot.rotation = Quaternion.Slerp(
                 constrainedHandRoot.rotation,
-                desiredRot,
+                targetRot,
                 rotationFollowSpeed * Time.deltaTime
             );
 
@@ -186,6 +201,18 @@ namespace Modules.SoftPhysics
                 .transform.TransformDirection(wNormal / wSum)
                 .normalized;
 
+            _surfaceNormal = surfaceNormalWS;
+
+            // Tangent: direction from nearest to second nearest point, projected onto tangent plane.
+            if (count >= 2)
+            {
+                var p0 = pointCloud.transform.TransformPoint((Vector3)pointCloud.Points[_knnResults[0].Index]);
+                var p1 = pointCloud.transform.TransformPoint((Vector3)pointCloud.Points[_knnResults[1].Index]);
+                var tangentCandidate = Vector3.ProjectOnPlane(p1 - p0, surfaceNormalWS);
+                if (tangentCandidate.sqrMagnitude > 1e-6f)
+                    _surfaceTangent = tangentCandidate.normalized;
+            }
+
             // Signed distance: positive means the hand is above the surface.
             // penetration > 0 means the palm sphere is crossing into the surface.
             var signedDist = Vector3.Dot(desiredWorldPos - surfacePointWS, surfaceNormalWS);
@@ -200,6 +227,21 @@ namespace Modules.SoftPhysics
             var t = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(penetration / maxPenetrationDepth));
             var correctedPos = surfacePointWS + surfaceNormalWS * handRadius;
             return Vector3.Lerp(desiredWorldPos, correctedPos, t);
+        }
+
+        // ── Rotation constraint ───────────────────────────────────────────────
+
+        // Clamps the X (pitch) rotation so the hand's Z axis lies in the surface tangent plane.
+        // Projects desiredForward onto the plane perpendicular to _surfaceNormal; falls back
+        // to _surfaceTangent when the hand points nearly straight into the surface.
+        private Quaternion SolveForRotation(Quaternion desiredRot)
+        {
+            var forward = Vector3.ProjectOnPlane(desiredRot * Vector3.forward, _surfaceNormal);
+            if (forward.sqrMagnitude < 0.001f)
+                forward = _surfaceTangent;
+            else
+                forward.Normalize();
+            return Quaternion.LookRotation(forward, desiredRot * Vector3.up);
         }
 
         // ── Bone pose mirroring ───────────────────────────────────────────────

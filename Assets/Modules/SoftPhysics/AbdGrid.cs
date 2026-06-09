@@ -130,7 +130,7 @@ namespace Modules.SoftPhysics
         {
             try
             {
-                if (other.TryGetComponent(out PhysicallyHand _))
+                if (other.TryGetComponent(out HandConstraint _))
                 {
                     if (!_isShown)
                     {
@@ -151,7 +151,7 @@ namespace Modules.SoftPhysics
         {
             try
             {
-                if (other.TryGetComponent(out PhysicallyHand _))
+                if (other.TryGetComponent(out HandConstraint _))
                 {
                     if (_isShown)
                     {

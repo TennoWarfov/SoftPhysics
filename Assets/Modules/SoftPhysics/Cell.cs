@@ -11,14 +11,13 @@ namespace Modules.SoftPhysics
         [SerializeField]
         private Material defaultMaterial;
 
-        [SerializeField]
         private DecalProjector[] _decalProjectors;
 
         private void Awake()
         {
             var col = gameObject.AddComponent<BoxCollider>();
             col.isTrigger = true;
-            col.size = new Vector3(0.06f, 0.02f, 0.06f);
+            col.size = new Vector3(0.06f, 0.06f, 0.06f);
         }
 
         public void Initialize(params DecalProjector[] decalProjector)
@@ -28,7 +27,7 @@ namespace Modules.SoftPhysics
 
         private void OnTriggerEnter(Collider other)
         {
-            if (other.transform.GetComponentInParent<PhysicallyHand>())
+            if (other.transform.GetComponent<Finger>())
             {
                 ToggleMaterial(true);
             }
@@ -36,7 +35,7 @@ namespace Modules.SoftPhysics
 
         private void OnTriggerExit(Collider other)
         {
-            if (other.transform.GetComponentInParent<PhysicallyHand>())
+            if (other.transform.GetComponent<Finger>())
             {
                 ToggleMaterial(false);
             }

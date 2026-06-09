@@ -96,9 +96,9 @@ namespace Modules.SoftPhysics.SoftMesh
 
         // ── State ─────────────────────────────────────────────────────────────
 
-        private bool _inactive;
         private MeshFilter _mf;
         private MeshCollider _mc;
+        private bool _inactive;
         private Mesh _mesh;
         private Vector3[] _cpuVerts;
         private int _frameCounter;

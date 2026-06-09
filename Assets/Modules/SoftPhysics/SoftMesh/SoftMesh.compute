@@ -1,6 +1,8 @@
 #pragma kernel Simulate
 #pragma kernel ApplyImpact
 #pragma kernel CheckActivity
+#pragma kernel ResetTargets
+#pragma kernel ApplyFingertip
 
 // Buffers
 StructuredBuffer<float3> _Rest;
@@ -12,7 +14,7 @@ StructuredBuffer<float> _BoundaryWeights;
 uint _VertexCount;
 uint _UseBoundaryMask;
 
-// impact params
+// Impact / fingertip params (shared uniforms)
 float3 _ImpactPointLS;
 float3 _PushDirLS;
 float3 _AbsScale;
@@ -26,6 +28,8 @@ float _SpringK;
 float _Damping;
 
 
+// ── Existing kernels (unchanged) ─────────────────────────────────────────────
+
 [numthreads(256, 1, 1)]
 void Simulate(uint3 id : SV_DispatchThreadID)
 {
@@ -33,18 +37,17 @@ void Simulate(uint3 id : SV_DispatchThreadID)
     if (i >= _VertexCount)
         return;
 
-    float3 x = _Pos[i];
+    float3 x  = _Pos[i];
     float3 xT = _Target[i];
-    float3 v = _Vel[i];
+    float3 v  = _Vel[i];
 
-    // F = -k(x-x0) - c v
-    float3 springForce = -_SpringK * (x - xT);
+    // F = -k(x - x0) - c·v
+    float3 springForce  = -_SpringK * (x - xT);
     float3 dampingForce = -_Damping * v;
 
+    float3 a = springForce + dampingForce;
 
-    float3 a = (springForce + dampingForce);
-
-    // semi-implicit euler
+    // Semi-implicit Euler
     v += a * _DT;
     x += v * _DT;
 
@@ -61,28 +64,20 @@ void ApplyImpact(uint3 id : SV_DispatchThreadID)
 
     float3 xLS = _Pos[i];
 
-    // Local-space delta
-    float3 dLS = xLS - _ImpactPointLS;
-
-    // Approximate world-space distance using absolute scale
-    // This keeps the deformation radius independent of transform scale
-    float3 dWS = dLS * _AbsScale;
+    float3 dLS   = xLS - _ImpactPointLS;
+    float3 dWS   = dLS * _AbsScale;
     float distWS = length(dWS);
 
     if (distWS > _MaxDistanceWS)
         return;
 
-    // Smooth falloff based on world-space distance
     float t = saturate(distWS / _MaxDistanceWS);
     float w = 1.0 - t;
     w = w * w * (3.0 - 2.0 * w); // smoothstep
 
     float3 pushDirLS = normalize(_PushDirLS);
+    float  bw        = _UseBoundaryMask ? _BoundaryWeights[i] : 1.0;
 
-    // 0 = boundary (fully pinned), 1 = interior (full deformation)
-    float bw = _UseBoundaryMask ? _BoundaryWeights[i] : 1.0;
-
-    // Apply target offset and velocity impulse in local space
     _Target[i] -= pushDirLS * (_Dent * w * bw);
     _Vel[i]    -= pushDirLS * (_Kick * w * bw);
 }
@@ -94,12 +89,60 @@ void CheckActivity(uint3 id : SV_DispatchThreadID)
     if (i >= _VertexCount)
         return;
 
-    float3 v = _Vel[i];
-    float speedSq = dot(v, v);
+    float3 v      = _Vel[i];
+    float  speedSq = dot(v, v);
 
-    // hardcoded threshold
     if (speedSq > 0.001 * 0.001)
-    {
         InterlockedOr(_ActiveFlag[0], 1);
-    }
+}
+
+
+// ── New kernels for non-physics fingertip interaction ─────────────────────────
+
+// Copies _Rest into _Target.
+// Called once per FixedUpdate frame (before all ApplyFingertip dispatches) so
+// that targets reset to the neutral pose automatically when fingers are absent,
+// giving the spring-damper system a resting target to pull back toward.
+[numthreads(256, 1, 1)]
+void ResetTargets(uint3 id : SV_DispatchThreadID)
+{
+    uint i = id.x;
+    if (i >= _VertexCount)
+        return;
+
+    _Target[i] = _Rest[i];
+}
+
+// Displaces _Target vertices within _MaxDistanceWS of _ImpactPointLS (which
+// holds the fingertip position in local space for this kernel).
+//
+// Key differences from ApplyImpact:
+//   • Distance is measured from the REST vertex, not the current deformed pos.
+//     This keeps the influence radius stable as the mesh deforms.
+//   • Only _Target is written; _Vel is untouched.
+//     Velocity is generated organically by the spring as _Pos chases _Target,
+//     so there is no need for an explicit velocity impulse per finger per frame.
+[numthreads(256, 1, 1)]
+void ApplyFingertip(uint3 id : SV_DispatchThreadID)
+{
+    uint i = id.x;
+    if (i >= _VertexCount)
+        return;
+
+    float3 restLS = _Rest[i];
+    float3 dLS    = restLS - _ImpactPointLS;
+    float3 dWS    = dLS * _AbsScale;
+    float distWS  = length(dWS);
+
+    if (distWS > _MaxDistanceWS)
+        return;
+
+    float t = saturate(distWS / _MaxDistanceWS);
+    float w = 1.0 - t;
+    w = w * w * (3.0 - 2.0 * w); // smoothstep falloff
+
+    float  bw        = _UseBoundaryMask ? _BoundaryWeights[i] : 1.0;
+    float3 pushDirLS = normalize(_PushDirLS);
+
+    _Target[i] -= pushDirLS * (_Dent * w * bw);
 }

@@ -12,6 +12,24 @@ namespace Modules.SoftPhysics.SoftMesh
         [SerializeField]
         private ComputeShader compute;
 
+        // ── Fingertip interaction ─────────────────────────────────────────────
+        // Assigning any transforms here enables non-physics proximity mode.
+        // Leave empty to fall back to the legacy OnCollisionEnter path.
+
+        [Header("Fingertip Interaction")]
+        [SerializeField]
+        private Transform[] fingertips;
+
+        [SerializeField]
+        [Tooltip(
+            "Multiplies Time.fixedDeltaTime passed to the spring solver. "
+                + "Higher values produce faster response. Instability may appear above ~2 "
+                + "depending on springStiffness."
+        )]
+        private float simulationSpeed = 1f;
+
+        // ── Impact (legacy collision path + shared dent/distance params) ──────
+
         [Header("Impact")]
         [SerializeField]
         private float minImpactImpulse = 0.5f;
@@ -23,7 +41,7 @@ namespace Modules.SoftPhysics.SoftMesh
         private float kick = 1.5f;
 
         [SerializeField]
-        private float maxDistance = 1.0f;
+        private float maxDistance = 0.08f;
 
         [SerializeField]
         private LayerMask deformLayers;
@@ -55,26 +73,29 @@ namespace Modules.SoftPhysics.SoftMesh
         [Header("Debug")]
         public bool reset;
 
+        // ── Shader property IDs ───────────────────────────────────────────────
+
         private readonly uint[] _activeFlagCPU = new uint[1];
         private static readonly int Vel = Shader.PropertyToID("_Vel");
         private static readonly int ActiveFlag = Shader.PropertyToID("_ActiveFlag");
         private static readonly int VertexCount = Shader.PropertyToID("_VertexCount");
-        private static readonly int BoundaryWeights = Shader.PropertyToID("_BoundaryWeights");
-        private static readonly int UseBoundaryMask = Shader.PropertyToID("_UseBoundaryMask");
+        private static readonly int BoundaryWts = Shader.PropertyToID("_BoundaryWeights");
+        private static readonly int UseBoundaryMsk = Shader.PropertyToID("_UseBoundaryMask");
         private static readonly int DT = Shader.PropertyToID("_DT");
         private static readonly int SpringK = Shader.PropertyToID("_SpringK");
         private static readonly int Damping = Shader.PropertyToID("_Damping");
         private static readonly int ImpactPointLs = Shader.PropertyToID("_ImpactPointLS");
         private static readonly int PushDirLs = Shader.PropertyToID("_PushDirLS");
-        private static readonly int AbsScale = Shader.PropertyToID("_AbsScale");
-        private static readonly int Kick = Shader.PropertyToID("_Kick");
-        private static readonly int Dent = Shader.PropertyToID("_Dent");
-        private static readonly int Rest = Shader.PropertyToID("_Rest");
-        private static readonly int Target = Shader.PropertyToID("_Target");
-        private static readonly int Pos = Shader.PropertyToID("_Pos");
-        private static readonly int MaxDistanceWs = Shader.PropertyToID("_MaxDistanceWS");
+        private static readonly int AbsScaleId = Shader.PropertyToID("_AbsScale");
+        private static readonly int KickId = Shader.PropertyToID("_Kick");
+        private static readonly int DentId = Shader.PropertyToID("_Dent");
+        private static readonly int RestId = Shader.PropertyToID("_Rest");
+        private static readonly int TargetId = Shader.PropertyToID("_Target");
+        private static readonly int PosId = Shader.PropertyToID("_Pos");
+        private static readonly int MaxDistWs = Shader.PropertyToID("_MaxDistanceWS");
 
-        // Sleep / activity flag
+        // ── State ─────────────────────────────────────────────────────────────
+
         private bool _inactive;
         private MeshFilter _mf;
         private MeshCollider _mc;
@@ -82,24 +103,33 @@ namespace Modules.SoftPhysics.SoftMesh
         private Vector3[] _cpuVerts;
         private int _frameCounter;
 
-        //GPU Resources
+        // GPU resources
         private ComputeBuffer _restBuf,
             _targetBuf,
             _posBuf,
             _velBuf,
             _activeFlagBuf,
             _boundaryWeightBuf;
+
+        // Kernel handles
         private int _kSimulate,
             _kImpact,
-            _kCheckActivity; // Kernels
+            _kCheckActivity,
+            _kResetTargets,
+            _kApplyFingertip;
+
         private int _vertexCount;
+        private Bounds _localBounds; // cached for per-finger coarse culling
+        private Vector3 _absScale; // cached per-frame to avoid redundant work
+
+        // ── Lifecycle ─────────────────────────────────────────────────────────
 
         private void Awake()
         {
             _mf = GetComponent<MeshFilter>();
             _mc = GetComponent<MeshCollider>();
 
-            //One instance per SoftMesh otherwise they share the same buffer bindings!
+            // Per-instance shader so multiple SoftMesh components never share buffers.
             compute = Instantiate(compute);
 
             _mesh = Instantiate(_mf.sharedMesh);
@@ -109,38 +139,41 @@ namespace Modules.SoftPhysics.SoftMesh
 
             var rest = _mesh.vertices;
             _vertexCount = rest.Length;
-
             _cpuVerts = new Vector3[_vertexCount];
+            _localBounds = _mesh.bounds;
 
-            // Create Buffers
+            // Allocate GPU buffers
             _restBuf = new ComputeBuffer(_vertexCount, sizeof(float) * 3);
             _posBuf = new ComputeBuffer(_vertexCount, sizeof(float) * 3);
             _velBuf = new ComputeBuffer(_vertexCount, sizeof(float) * 3);
             _targetBuf = new ComputeBuffer(_vertexCount, sizeof(float) * 3);
+
             _restBuf.SetData(rest);
             _targetBuf.SetData(rest);
             _posBuf.SetData(rest);
             _velBuf.SetData(new Vector3[_vertexCount]);
 
-            // Find Kernels
+            // Find kernels
             _kSimulate = compute.FindKernel("Simulate");
             _kImpact = compute.FindKernel("ApplyImpact");
             _kCheckActivity = compute.FindKernel("CheckActivity");
+            _kResetTargets = compute.FindKernel("ResetTargets");
+            _kApplyFingertip = compute.FindKernel("ApplyFingertip");
 
-            // Bind Buffers to Kernels
+            // Bind common buffers to every kernel that needs them
             BindCommon(_kSimulate);
             BindCommon(_kImpact);
+            BindCommon(_kResetTargets);
+            BindCommon(_kApplyFingertip);
 
-            // 1-uint activity flag buffer
+            // Activity flag (1-element uint)
             _activeFlagBuf = new ComputeBuffer(1, sizeof(uint));
             _activeFlagBuf.SetData(new uint[] { 0 });
-
-            // Bind to kernel
             compute.SetBuffer(_kCheckActivity, Vel, _velBuf);
             compute.SetBuffer(_kCheckActivity, ActiveFlag, _activeFlagBuf);
             compute.SetInt(VertexCount, _vertexCount);
 
-            // Boundary mask: reuse serialized weights if valid, otherwise compute from scratch
+            // Boundary mask
             if (
                 useBoundaryMask
                 && (boundaryWeights == null || boundaryWeights.Length != _vertexCount)
@@ -150,8 +183,9 @@ namespace Modules.SoftPhysics.SoftMesh
             var bw = useBoundaryMask ? boundaryWeights : MakeOnes(_vertexCount);
             _boundaryWeightBuf = new ComputeBuffer(_vertexCount, sizeof(float));
             _boundaryWeightBuf.SetData(bw);
-            compute.SetBuffer(_kImpact, BoundaryWeights, _boundaryWeightBuf);
-            compute.SetInt(UseBoundaryMask, useBoundaryMask ? 1 : 0);
+            compute.SetBuffer(_kImpact, BoundaryWts, _boundaryWeightBuf);
+            compute.SetBuffer(_kApplyFingertip, BoundaryWts, _boundaryWeightBuf);
+            compute.SetInt(UseBoundaryMsk, useBoundaryMask ? 1 : 0);
         }
 
         private void OnDestroy()
@@ -175,14 +209,35 @@ namespace Modules.SoftPhysics.SoftMesh
                 _inactive = false;
             }
 
+            // Cache per-frame values used by multiple dispatches
+            var s = transform.lossyScale;
+            _absScale = new Vector3(Mathf.Abs(s.x), Mathf.Abs(s.y), Mathf.Abs(s.z));
+
+            compute.SetVector(AbsScaleId, _absScale);
+            compute.SetFloat(MaxDistWs, maxDistance);
+            compute.SetFloat(DentId, dent);
+
+            // ── Fingertip mode ────────────────────────────────────────────────
+            bool fingertipMode = fingertips != null && fingertips.Length > 0;
+
+            if (fingertipMode)
+            {
+                bool anyActive = ApplyFingertips();
+                if (anyActive)
+                    _inactive = false;
+            }
+
             if (_inactive)
                 return;
 
-            compute.SetFloat(DT, Time.fixedDeltaTime);
+            // ── Spring simulation ─────────────────────────────────────────────
+            var dt = Time.fixedDeltaTime * Mathf.Max(0f, simulationSpeed);
+            compute.SetFloat(DT, dt);
             compute.SetFloat(SpringK, springStiffness);
             compute.SetFloat(Damping, damping);
             Dispatch(_kSimulate);
 
+            // ── Activity check (GPU → CPU readback, 1 uint) ───────────────────
             _activeFlagCPU[0] = 0;
             _activeFlagBuf.SetData(_activeFlagCPU);
             Dispatch(_kCheckActivity);
@@ -192,16 +247,16 @@ namespace Modules.SoftPhysics.SoftMesh
             if (_inactive)
                 return;
 
+            // ── Upload deformed mesh to CPU ───────────────────────────────────
             _posBuf.GetData(_cpuVerts);
-
             _mesh.vertices = _cpuVerts;
             _mesh.RecalculateNormals();
             _mesh.RecalculateBounds();
+            _localBounds = _mesh.bounds;
 
             if (updateCollider && _mc)
             {
                 var n = Mathf.Max(1, updateColliderEveryNFrames);
-
                 if (_frameCounter % n == 0)
                 {
                     _mc.sharedMesh = null;
@@ -210,9 +265,76 @@ namespace Modules.SoftPhysics.SoftMesh
             }
         }
 
-        // OnCollisionEnter applies an impact to the mesh on collision. Very slow on large meshes!
+        // ── Fingertip interaction ─────────────────────────────────────────────
+
+        // Returns true if at least one fingertip is close enough to dispatch a
+        // deformation kernel. Called once per FixedUpdate when fingertip mode is active.
+        private bool ApplyFingertips()
+        {
+            // Reset _Target → _Rest on GPU first. This is the key step that enables
+            // automatic elastic recovery: when no finger is active, _Target stays at
+            // rest and the spring pulls _Pos back without any additional logic.
+            Dispatch(_kResetTargets);
+
+            // Expand bounds by maxDistance for coarse CPU-side culling.
+            // Fingers outside this box are definitively too far; those inside go to GPU.
+            var expanded = _localBounds;
+            expanded.Expand(maxDistance * 2f);
+
+            // Geometric center of the mesh in world space.
+            // Used to derive an inward push direction that is independent of pivot placement.
+            var meshCenterWs = transform.TransformPoint(_localBounds.center);
+
+            bool anyActive = false;
+
+            foreach (var tip in fingertips)
+            {
+                if (tip == null)
+                    continue;
+
+                var fingerPosWs = tip.position;
+                var fingerPosLs = transform.InverseTransformPoint(fingerPosWs);
+
+                // Coarse AABB reject — avoids a GPU dispatch for clearly distant fingers.
+                if (!expanded.Contains(fingerPosLs))
+                    continue;
+
+                // Closest point on the collider surface gives us a stable contact anchor.
+                // Even when the finger has penetrated the mesh, ClosestPoint returns the
+                // nearest exit point on the surface, which is a good push-direction reference.
+                var surfacePtWs = _mc.ClosestPoint(fingerPosWs);
+
+                // Push direction: from the surface contact point toward the mesh geometric center.
+                // This correctly tracks the inward surface normal for a convex mesh regardless
+                // of where the object pivot is placed.
+                // var pushDirWs = meshCenterWs - surfacePtWs;
+                // if (pushDirWs.sqrMagnitude < 1e-6f)
+                // pushDirWs = -transform.up; // degenerate guard (finger exactly at center)
+                // pushDirWs.Normalize();
+
+
+                Vector3 pushDirWsw = Vector3.up.normalized;
+                var pushDirLs = transform.InverseTransformDirection(pushDirWsw).normalized;
+
+                compute.SetVector(ImpactPointLs, fingerPosLs);
+                compute.SetVector(PushDirLs, pushDirLs);
+                Dispatch(_kApplyFingertip);
+
+                anyActive = true;
+            }
+
+            return anyActive;
+        }
+
+        // ── Legacy collision path (active when fingertips array is empty) ─────
+
         private void OnCollisionEnter(Collision c)
         {
+            // Disabled when fingertip mode is active to prevent conflict with
+            // ResetTargets (which would overwrite collision-driven target offsets).
+            if (fingertips != null && fingertips.Length > 0)
+                return;
+
             if (c.contactCount == 0)
                 return;
             if (c.impulse.magnitude < minImpactImpulse)
@@ -221,12 +343,7 @@ namespace Modules.SoftPhysics.SoftMesh
                 return;
 
             var cp = c.GetContact(0);
-
-            var impactPointWs = cp.point;
-            var pushDirWs = -cp.normal.normalized;
-
-            //float kick = kick * c.impulse.magnitude;
-            ApplyImpactGPU(impactPointWs, pushDirWs, kick, dent);
+            ApplyImpactGPU(cp.point, -cp.normal.normalized, kick, dent);
         }
 
         private void ApplyImpactGPU(
@@ -238,41 +355,35 @@ namespace Modules.SoftPhysics.SoftMesh
         {
             _inactive = false;
 
-            // Convert impact point from world space to local space
             var impactPointLs = transform.InverseTransformPoint(impactPointWs);
-
-            // Convert direction from world space to local space
             var pushDirLs = transform.InverseTransformDirection(pushDirWs).normalized;
-
-            // Absolute lossy scale used to approximate world-space distance
-            // from local-space delta (handles non-uniform scale)
             var s = transform.lossyScale;
             var absScale = new Vector3(Mathf.Abs(s.x), Mathf.Abs(s.y), Mathf.Abs(s.z));
 
             compute.SetVector(ImpactPointLs, impactPointLs);
             compute.SetVector(PushDirLs, pushDirLs);
-
-            // Scale correction so MaxDistance remains in world units
-            compute.SetVector(nameID: AbsScale, absScale);
-            compute.SetFloat(MaxDistanceWs, maxDistance);
-
-            compute.SetFloat(Kick, kickValue);
-            compute.SetFloat(Dent, dentValue);
+            compute.SetVector(AbsScaleId, absScale);
+            compute.SetFloat(MaxDistWs, maxDistance);
+            compute.SetFloat(KickId, kickValue);
+            compute.SetFloat(DentId, dentValue);
 
             Dispatch(_kImpact);
         }
+
+        // ── State reset ───────────────────────────────────────────────────────
 
         private void ResetState()
         {
             _restBuf.GetData(_cpuVerts);
 
-            _targetBuf.SetData(_cpuVerts); // Target = Rest
-            _posBuf.SetData(_cpuVerts); // Pos = Rest
-            _velBuf.SetData(new Vector3[_vertexCount]); // Vel = 0
+            _targetBuf.SetData(_cpuVerts);
+            _posBuf.SetData(_cpuVerts);
+            _velBuf.SetData(new Vector3[_vertexCount]);
 
             _mesh.vertices = _cpuVerts;
             _mesh.RecalculateNormals();
             _mesh.RecalculateBounds();
+            _localBounds = _mesh.bounds;
 
             if (_mc)
             {
@@ -280,6 +391,8 @@ namespace Modules.SoftPhysics.SoftMesh
                 _mc.sharedMesh = _mesh;
             }
         }
+
+        // ── GPU helpers ───────────────────────────────────────────────────────
 
         private void Dispatch(int kernel)
         {
@@ -289,15 +402,15 @@ namespace Modules.SoftPhysics.SoftMesh
 
         private void BindCommon(int kernel)
         {
-            compute.SetBuffer(kernel, Rest, _restBuf);
-            compute.SetBuffer(kernel, Target, _targetBuf);
-            compute.SetBuffer(kernel, Pos, _posBuf);
+            compute.SetBuffer(kernel, RestId, _restBuf);
+            compute.SetBuffer(kernel, TargetId, _targetBuf);
+            compute.SetBuffer(kernel, PosId, _posBuf);
             compute.SetBuffer(kernel, Vel, _velBuf);
             compute.SetInt(VertexCount, _vertexCount);
         }
 
-        // Recomputes geodesic weights and re-uploads to GPU.
-        // Available via right-click on the component in the Inspector.
+        // ── Inspector helpers ─────────────────────────────────────────────────
+
         [ContextMenu("Recompute Boundary Weights")]
         private void RecomputeBoundaryWeights()
         {
@@ -311,10 +424,7 @@ namespace Modules.SoftPhysics.SoftMesh
                 _boundaryWeightBuf.SetData(boundaryWeights);
         }
 
-        // -------------------------------------------------------------------------
-        // Boundary Mask: geodesic distance via multi-source Dijkstra
-        // Runs once at Awake; zero CPU cost at runtime.
-        // -------------------------------------------------------------------------
+        // ── Boundary mask (geodesic Dijkstra, runs once at Awake) ─────────────
 
         private float[] ComputeGeodesicBoundaryWeights(Mesh m)
         {
@@ -322,10 +432,8 @@ namespace Modules.SoftPhysics.SoftMesh
             var verts = m.vertices;
             var n = verts.Length;
 
-            // Weld co-located vertices so UV-seam duplicates don't appear as false boundaries
             var weld = WeldByPosition(verts);
 
-            // Count undirected edges by welded index; a boundary edge appears exactly once
             var edgeCount = new Dictionary<(int, int), int>();
             for (var t = 0; t < tris.Length; t += 3)
             {
@@ -349,7 +457,6 @@ namespace Modules.SoftPhysics.SoftMesh
                 return MakeOnes(n);
             }
 
-            // Build adjacency list over original (unwelded) vertex indices
             var adj = new List<(int v, float d)>[n];
             for (var i = 0; i < n; i++)
                 adj[i] = new List<(int, float)>();
@@ -363,7 +470,6 @@ namespace Modules.SoftPhysics.SoftMesh
                 AddAdj(adj, c, a, verts);
             }
 
-            // Zero-cost edges between welded pairs so geodesic can cross UV seams freely
             var weldGroups = new Dictionary<int, List<int>>();
             for (var i = 0; i < n; i++)
             {
@@ -381,7 +487,6 @@ namespace Modules.SoftPhysics.SoftMesh
                 }
             }
 
-            // Multi-source Dijkstra from all boundary vertices (O(n²), runs once at startup)
             var dist = new float[n];
             var visited = new bool[n];
             for (var i = 0; i < n; i++)
@@ -411,13 +516,11 @@ namespace Modules.SoftPhysics.SoftMesh
                 }
             }
 
-            // Normalize to [0..1] and apply smoothstep for a soft falloff
             var maxD = 0f;
             for (var i = 0; i < n; i++)
                 if (dist[i] < float.MaxValue)
                     maxD = Mathf.Max(maxD, dist[i]);
 
-            // Degenerate case: every vertex is on the boundary
             if (maxD < 1e-6f)
                 return MakeOnes(n);
 
@@ -430,7 +533,6 @@ namespace Modules.SoftPhysics.SoftMesh
             return weights;
         }
 
-        // Group vertices by rounded position; tolerance = 0.00001 world units
         private static int[] WeldByPosition(Vector3[] verts)
         {
             const float invEps = 100000f;
@@ -465,9 +567,9 @@ namespace Modules.SoftPhysics.SoftMesh
 
         private static void AddAdj(List<(int, float)>[] adj, int a, int b, Vector3[] verts)
         {
-            var d = Vector3.Distance(verts[a], verts[b]);
-            adj[a].Add((b, d));
-            adj[b].Add((a, d));
+            var dist = Vector3.Distance(verts[a], verts[b]);
+            adj[a].Add((b, dist));
+            adj[b].Add((a, dist));
         }
 
         private static float[] MakeOnes(int n)

@@ -261,35 +261,5 @@ namespace Modules.SoftPhysics
                 }
             }
         }
-
-        private void OnDrawGizmos()
-        {
-            var center = transform.position;
-            Gizmos.DrawSphere(center, .01f);
-
-            var up = center + transform.up * gridSpacing;
-            Gizmos.DrawSphere(up, .01f);
-
-            var leftUp = up + -transform.right * gridSpacing;
-            Gizmos.DrawSphere(leftUp, .01f);
-
-            var rightUp = up + transform.right * gridSpacing;
-            Gizmos.DrawSphere(rightUp, .01f);
-
-            var left = center + -transform.right * gridSpacing;
-            Gizmos.DrawSphere(left, .01f);
-
-            var right = center + transform.right * gridSpacing;
-            Gizmos.DrawSphere(right, .01f);
-
-            var leftDown = left + -transform.up * gridSpacing;
-            Gizmos.DrawSphere(leftDown, .01f);
-
-            var rightDown = right + -transform.up * gridSpacing;
-            Gizmos.DrawSphere(rightDown, .01f);
-
-            var down = center + -transform.up * gridSpacing;
-            Gizmos.DrawSphere(down, .01f);
-        }
     }
 }

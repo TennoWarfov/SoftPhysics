@@ -321,8 +321,8 @@ BoxCollider:
   m_ProvidesContacts: 0
   m_Enabled: 1
   serializedVersion: 3
-  m_Size: {x: 0.05, y: 0.03, z: 0.05}
-  m_Center: {x: 0, y: 0, z: 0.06}
+  m_Size: {x: 0.05, y: 0.024275541, z: 0.1059978}
+  m_Center: {x: 0, y: -0.007404804, z: 0.0879989}
 --- !u!114 &151890770
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -453,6 +453,11 @@ Transform:
 --- !u!4 &216717859 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: 4735366321682462626, guid: d6878e1999eb4b44a9f5a263af86c185, type: 3}
+  m_PrefabInstance: {fileID: 988048723}
+  m_PrefabAsset: {fileID: 0}
+--- !u!1 &223520493 stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: 7936776092077480430, guid: d6878e1999eb4b44a9f5a263af86c185, type: 3}
   m_PrefabInstance: {fileID: 988048723}
   m_PrefabAsset: {fileID: 0}
 --- !u!4 &249227481 stripped
@@ -656,6 +661,26 @@ Transform:
   m_CorrespondingSourceObject: {fileID: -491025668826540374, guid: 92f25163bcac6a545bb6bef363d36fed, type: 3}
   m_PrefabInstance: {fileID: 1568597281}
   m_PrefabAsset: {fileID: 0}
+--- !u!1 &390893333 stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: 2974021035037999946, guid: d6878e1999eb4b44a9f5a263af86c185, type: 3}
+  m_PrefabInstance: {fileID: 988048723}
+  m_PrefabAsset: {fileID: 0}
+--- !u!114 &390893334
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 390893333}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 71829fc76754484fa8aac3ad31f1b014, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Modules.SoftPhysics.GhostHandShower
+  ghostMesh: {fileID: 532365813}
+  ghost: {fileID: 988048749}
+  target: {fileID: 151890768}
 --- !u!4 &392614750 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: 7356745509213607317, guid: 92f25163bcac6a545bb6bef363d36fed, type: 3}
@@ -1314,6 +1339,26 @@ Transform:
   m_CorrespondingSourceObject: {fileID: 7896951238192422667, guid: 27e4ff5bbdd0c884fbc4acc7d3d21151, type: 3}
   m_PrefabInstance: {fileID: 475285022}
   m_PrefabAsset: {fileID: 0}
+--- !u!1 &477230450 stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: 2425469361241291328, guid: d6878e1999eb4b44a9f5a263af86c185, type: 3}
+  m_PrefabInstance: {fileID: 988048723}
+  m_PrefabAsset: {fileID: 0}
+--- !u!114 &477230456
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 477230450}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 71829fc76754484fa8aac3ad31f1b014, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Modules.SoftPhysics.GhostHandShower
+  ghostMesh: {fileID: 223520493}
+  ghost: {fileID: 322998203}
+  target: {fileID: 1918883695}
 --- !u!4 &482541184 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: 140937275956955998, guid: 92f25163bcac6a545bb6bef363d36fed, type: 3}
@@ -1328,6 +1373,11 @@ Transform:
 Transform:
   m_CorrespondingSourceObject: {fileID: -1113183009310069866, guid: 92f25163bcac6a545bb6bef363d36fed, type: 3}
   m_PrefabInstance: {fileID: 1568597281}
+  m_PrefabAsset: {fileID: 0}
+--- !u!1 &532365813 stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: 5699924507134959481, guid: d6878e1999eb4b44a9f5a263af86c185, type: 3}
+  m_PrefabInstance: {fileID: 988048723}
   m_PrefabAsset: {fileID: 0}
 --- !u!4 &545867786 stripped
 Transform:
@@ -1792,7 +1842,13 @@ PrefabInstance:
     - targetCorrespondingSourceObject: {fileID: 6311120899289156754, guid: d6878e1999eb4b44a9f5a263af86c185, type: 3}
       insertIndex: 6
       addedObject: {fileID: 1927464310}
-    m_AddedComponents: []
+    m_AddedComponents:
+    - targetCorrespondingSourceObject: {fileID: 2425469361241291328, guid: d6878e1999eb4b44a9f5a263af86c185, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 477230456}
+    - targetCorrespondingSourceObject: {fileID: 2974021035037999946, guid: d6878e1999eb4b44a9f5a263af86c185, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 390893334}
   m_SourcePrefab: {fileID: 100100000, guid: d6878e1999eb4b44a9f5a263af86c185, type: 3}
 --- !u!4 &988048724 stripped
 Transform:
